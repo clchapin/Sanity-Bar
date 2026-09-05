@@ -1,24 +1,29 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Configurable Phrases, Better Chat, 2s Fade)
+-- MODULE SCRIPT: CloneManager (Updated with Solo "[REDACTED]" Variant)
 -- Upload this updated raw script to your GitHub repository.
 -- =================================================================
 
--- CONFIGURATION (Customize clone phrases and timing at the top)
 local CONFIG = {
-	Phrases = {
+	StandardPhrases = {
 		"you are so intriguing",
 		"i see you",
-		"don't look away",
-		"why are you running",
-		"look at me"
+		"don't look away"
+	},
+	SoloPhrases = {
+		"you are entirely alone",
+		"no one can hear you",
+		"the void remembers",
+		"abandoned"
 	},
 	SpawnCheckInterval = 1.5,
-	BaseSpawnChance = 20, -- 1/20 chance at 100 sanity
+	BaseSpawnChance = 20,
+	SoloSpawnChanceMultiplier = 2, -- Spawns less often when solo
 	MinSpawnDistance = 10,
 	MaxSpawnDistance = 22,
-	ProximityPenaltyRange = 3,
+	StandardPenalty = 15,
+	SoloPenalty = 25, -- Loses 25% sanity when solo variant triggers
 	ChatTriggerRange = 6,
-	FadeDuration = 2.0 -- Fade out duration set to 2 seconds
+	FadeDuration = 2.0
 }
 
 local Players = game:GetService("Players")
@@ -35,12 +40,11 @@ local isGlitching = false
 
 local CloneModule = {}
 
--- Helper to get a random configured phrase
-local function getRandomPhrase()
-	return CONFIG.Phrases[math.random(1, #CONFIG.Phrases)]
+local function getRandomPhrase(isSolo)
+	local list = isSolo and CONFIG.SoloPhrases or CONFIG.StandardPhrases
+	return list[math.random(1, #list)]
 end
 
--- Scramble phrase characters
 local function scrambleText(text)
 	local scrambled = ""
 	for c = 1, #text do
@@ -54,7 +58,6 @@ local function scrambleText(text)
 	return scrambled
 end
 
--- Smoothly fade out clone parts over the configured fade duration (2 seconds)
 local function fadeOutClone(cloneInstance)
 	if not cloneInstance or not cloneInstance.Parent then return end
 	
@@ -75,13 +78,13 @@ local function fadeOutClone(cloneInstance)
 	end)
 end
 
--- Trigger visual glitched penalty and sanity reduction when within proximity range
-local function triggerPenalty(cloneInstance, sanityModule)
+local function triggerPenalty(cloneInstance, sanityModule, isSolo)
 	if isGlitching then return end
 	isGlitching = true
 	
+	local penaltyAmount = isSolo and CONFIG.SoloPenalty or CONFIG.StandardPenalty
 	if sanityModule and sanityModule.ModifySanity then
-		sanityModule:ModifySanity(-15)
+		sanityModule:ModifySanity(-penaltyAmount)
 	end
 	
 	fadeOutClone(cloneInstance)
@@ -94,7 +97,7 @@ local function triggerPenalty(cloneInstance, sanityModule)
 				colorCorr = Instance.new("ColorCorrectionEffect")
 				colorCorr.Parent = Lighting
 			end
-			colorCorr.TintColor = Color3.fromRGB(200, 0, 255)
+			colorCorr.TintColor = isSolo and Color3.fromRGB(100, 0, 150) or Color3.fromRGB(200, 0, 255)
 			colorCorr.Saturation = -3
 			colorCorr.Contrast = 2
 			Camera.CFrame = Camera.CFrame * CFrame.new(math.random(-1, 1) * 0.4, math.random(-1, 1) * 0.4, 0)
@@ -111,112 +114,135 @@ local function triggerPenalty(cloneInstance, sanityModule)
 end
 
 function CloneModule:Init(sanityModule)
-	-- 1. Spawner Loop
 	task.spawn(function()
 		while true do
 			task.wait(CONFIG.SpawnCheckInterval)
 			
 			local currentSanity = sanityModule:GetSanity()
 			local scaleFactor = math.clamp(currentSanity / 100, 0.1, 1)
-			local chanceThreshold = math.floor(CONFIG.BaseSpawnChance * scaleFactor)
+			
+			-- Check if the player is completely alone in the server
+			local isSoloServer = (#Players:GetPlayers() == 1)
+			
+			-- Adjust spawn threshold (spawns less often when solo)
+			local baseChance = isSoloServer and (CONFIG.BaseSpawnChance * CONFIG.SoloSpawnChanceMultiplier) or CONFIG.BaseSpawnChance
+			local chanceThreshold = math.floor(baseChance * scaleFactor)
 			
 			if math.random(1, chanceThreshold) == 1 then
-				local otherPlayers = {}
-				for _, p in ipairs(Players:GetPlayers()) do
-					if p ~= localPlayer and p.Character then
-						local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-						local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
-						if hrp and humanoid and humanoid.Health > 0 then
-							table.insert(otherPlayers, p)
-						end
-					end
-				end
-				
 				local localChar = localPlayer.Character
-				if #otherPlayers > 0 and localChar and localChar:FindFirstChild("HumanoidRootPart") then
-					local targetPlayer = otherPlayers[math.random(1, #otherPlayers)]
-					if targetPlayer and targetPlayer.Character then
-						local targetChar = targetPlayer.Character
-						local targetHrp = targetChar:FindFirstChild("HumanoidRootPart")
-						
-						if targetHrp then
-							targetChar.Archivable = true
-							local clone = targetChar:Clone()
-							targetChar.Archivable = false
-							
-							if clone then
-								clone.Name = "WrongClone"
-								
-								for _, child in ipairs(clone:GetDescendants()) do
-									if child:IsA("Script") or child:IsA("LocalScript") then
-										child:Destroy()
-									end
+				if localChar and localChar:FindFirstChild("HumanoidRootPart") then
+					local targetChar = nil
+					
+					if isSoloServer then
+						-- Solo version: Clone the local player itself as the "[REDACTED]" variant
+						localChar.Archivable = true
+						targetChar = localChar:Clone()
+						localChar.Archivable = false
+					else
+						-- Standard version: Choose a random other player
+						local otherPlayers = {}
+						for _, p in ipairs(Players:GetPlayers()) do
+							if p ~= localPlayer and p.Character then
+								local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+								local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
+								if hrp and humanoid and humanoid.Health > 0 then
+									table.insert(otherPlayers, p)
 								end
-								
-								for _, child in ipairs(clone:GetChildren()) do
-									if child:IsA("Accessory") and math.random() > 0.4 then
-										child:Destroy()
-									end
-								end
-								
-								for _, part in ipairs(clone:GetDescendants()) do
-									if part:IsA("BasePart") then
-										part.Color = part.Color:Lerp(Color3.fromRGB(130, 20, 160), 0.35)
-										part.CanCollide = false
-									end
-								end
-								
-								-- Ensure clones do NOT spawn directly on top of the player
-								local localRoot = localChar.HumanoidRootPart
-								local spawnPos
-								local validSpawn = false
-								local attempts = 0
-								
-								repeat
-									attempts = attempts + 1
-									local randomAngle = math.random() * math.pi * 2
-									local randomDist = math.random(CONFIG.MinSpawnDistance, CONFIG.MaxSpawnDistance)
-									local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
-									
-									local raycastParams = RaycastParams.new()
-									raycastParams.FilterDescendantsInstances = {localChar}
-									raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-									
-									local rayResult = Workspace:Raycast(rayOrigin, Vector3.new(0, -25, 0), raycastParams)
-									if rayResult then
-										spawnPos = rayResult.Position
-										if (spawnPos - localRoot.Position).Magnitude >= (CONFIG.MinSpawnDistance - 2) then
-											validSpawn = true
-										end
-									end
-								until validSpawn or attempts > 5
-								
-								if not spawnPos then
-									spawnPos = localRoot.Position + Vector3.new(12, 0, 0)
-								end
-								
-								clone:PivotTo(CFrame.new(spawnPos + Vector3.new(0, 3, 0)))
-								clone.Parent = Workspace
-								
-								local cloneData = {
-									Instance = clone,
-								}
-								table.insert(activeClones, cloneData)
-								
-								task.delay(8, function()
-									if clone and clone.Parent then
-										fadeOutClone(clone)
-									end
-								end)
 							end
 						end
+						
+						if #otherPlayers > 0 then
+							local targetPlayer = otherPlayers[math.random(1, #otherPlayers)]
+							if targetPlayer and targetPlayer.Character then
+								targetPlayer.Character.Archivable = true
+								targetChar = targetPlayer.Character:Clone()
+								targetPlayer.Character.Archivable = false
+							end
+						end
+					end
+					
+					if targetChar then
+						local cloneName = isSoloServer and "VoidClone" or "WrongClone"
+						targetChar.Name = cloneName
+						
+						for _, child in ipairs(targetChar:GetDescendants()) do
+							if child:IsA("Script") or child:IsA("LocalScript") then
+								child:Destroy()
+							end
+						end
+						
+						for _, child in ipairs(targetChar:GetChildren()) do
+							if child:IsA("Accessory") and not isSoloServer and math.random() > 0.4 then
+								child:Destroy()
+							end
+						end
+						
+						-- Apply appearance modifications
+						for _, part in ipairs(targetChar:GetDescendants()) do
+							if part:IsA("BasePart") then
+								if isSoloServer then
+									-- Voided out look: Pitch black parts with a dark material effect
+									part.Color = Color3.fromRGB(0, 0, 0)
+									part.Material = Enum.Material.SmoothPlastic
+								else
+									part.Color = part.Color:Lerp(Color3.fromRGB(130, 20, 160), 0.35)
+								end
+								part.CanCollide = false
+							elseif part:IsA("Decal") or part:IsA("Texture") then
+								if isSoloServer then
+									part.Transparency = 0.8 -- Semi-transparent void aesthetic
+								end
+							end
+						end
+						
+						local localRoot = localChar.HumanoidRootPart
+						local spawnPos
+						local validSpawn = false
+						local attempts = 0
+						
+						repeat
+							attempts = attempts + 1
+							local randomAngle = math.random() * math.pi * 2
+							local randomDist = math.random(CONFIG.MinSpawnDistance, CONFIG.MaxSpawnDistance)
+							local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
+							
+							local raycastParams = RaycastParams.new()
+							raycastParams.FilterDescendantsInstances = {localChar}
+							raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+							
+							local rayResult = Workspace:Raycast(rayOrigin, Vector3.new(0, -25, 0), raycastParams)
+							if rayResult then
+								spawnPos = rayResult.Position
+								if (spawnPos - localRoot.Position).Magnitude >= (CONFIG.MinSpawnDistance - 2) then
+									validSpawn = true
+								end
+							end
+						until validSpawn or attempts > 5
+						
+						if not spawnPos then
+							spawnPos = localRoot.Position + Vector3.new(12, 0, 0)
+						end
+						
+						targetChar:PivotTo(CFrame.new(spawnPos + Vector3.new(0, 3, 0)))
+						targetChar.Parent = Workspace
+						
+						local cloneData = {
+							Instance = targetChar,
+							IsSoloVariant = isSoloServer,
+						}
+						table.insert(activeClones, cloneData)
+						
+						task.delay(8, function()
+							if targetChar and targetChar.Parent then
+								fadeOutClone(targetChar)
+							end
+						end)
 					end
 				end
 			end
 		end
 	end)
 	
-	-- 2. Enhanced Chat Listener: Better range-checked detection supporting modern TextChatService & Legacy chat
 	local function handleChatInteraction()
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -228,7 +254,7 @@ function CloneModule:Init(sanityModule)
 				local cloneRoot = clone.HumanoidRootPart
 				
 				if (cloneRoot.Position - localPos).Magnitude <= CONFIG.ChatTriggerRange then
-					local phrase = getRandomPhrase()
+					local phrase = getRandomPhrase(cloneData.IsSoloVariant)
 					local scrambled = scrambleText(phrase)
 					ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					break
@@ -237,10 +263,8 @@ function CloneModule:Init(sanityModule)
 		end
 	end
 
-	-- Connect to legacy Chatted event
 	localPlayer.Chatted:Connect(handleChatInteraction)
 
-	-- Connect to modern TextChatService if available to improve responsiveness
 	local TextChatService = game:GetService("TextChatService")
 	if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
 		local channels = TextChatService:FindFirstChild("TextChannels")
@@ -256,7 +280,6 @@ function CloneModule:Init(sanityModule)
 		end
 	end
 	
-	-- 3. Render Loop: Head tracking, proximity checks, and periodic ambient chat bubbles
 	RunService.RenderStepped:Connect(function()
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -275,12 +298,12 @@ function CloneModule:Init(sanityModule)
 				
 				if (cloneRoot.Position - localPos).Magnitude < CONFIG.ProximityPenaltyRange then
 					table.remove(activeClones, i)
-					triggerPenalty(clone, sanityModule)
+					triggerPenalty(clone, sanityModule, cloneData.IsSoloVariant)
 				else
 					if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
 						cloneData.NextChatTime = tick() + math.random(120, 200) / 100
 						
-						local phrase = getRandomPhrase()
+						local phrase = getRandomPhrase(cloneData.IsSoloVariant)
 						local scrambled = scrambleText(phrase)
 						ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					end
