@@ -1,5 +1,5 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Updated with Solo "[REDACTED]" Variant)
+-- MODULE SCRIPT: CloneManager (Updated with "[REDACTED]" Stare-Chase Mechanic)
 -- Upload this updated raw script to your GitHub repository.
 -- =================================================================
 
@@ -15,15 +15,27 @@ local CONFIG = {
 		"the void remembers",
 		"abandoned"
 	},
+	ChasePhrases = {
+		"we shall become one"
+	},
 	SpawnCheckInterval = 1.5,
 	BaseSpawnChance = 20,
-	SoloSpawnChanceMultiplier = 2, -- Spawns less often when solo
+	SoloSpawnChanceMultiplier = 2,
 	MinSpawnDistance = 10,
 	MaxSpawnDistance = 22,
 	StandardPenalty = 15,
-	SoloPenalty = 25, -- Loses 25% sanity when solo variant triggers
+	SoloPenalty = 25,
 	ChatTriggerRange = 6,
-	FadeDuration = 2.0
+	FadeDuration = 2.0,
+	
+	-- [REDACTED] Chase Configuration
+	SoloLifespan = 30,         -- Despawns after 30 seconds if alone
+	StareDurationToTrigger = 5, -- Looking at it for 5 seconds triggers the chase
+	ChaseDuration = 10,        -- Chase lasts for 10 seconds max
+	CatchDistance = 3,         -- Distance to trigger being caught
+	DamageAmount = 60,         -- Damage dealt if caught
+	BaseChaseSpeed = 16,       -- Initial chase walkspeed
+	MaxChaseSpeed = 28         -- Maximum chase walkspeed
 }
 
 local Players = game:GetService("Players")
@@ -113,6 +125,26 @@ local function triggerPenalty(cloneInstance, sanityModule, isSolo)
 	end)
 end
 
+-- Triggered when [REDACTED] catches the player during a chase
+local function triggerCatch(cloneInstance)
+	if not cloneInstance or not cloneInstance.Parent then return end
+	
+	local head = cloneInstance:FindFirstChild("Head")
+	if head then
+		ChatService:Chat(head, "we shall become one", Enum.ChatColor.Red)
+	end
+	
+	local localChar = localPlayer.Character
+	if localChar then
+		local humanoid = localChar:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.Health = math.max(0, humanoid.Health - CONFIG.DamageAmount)
+		end
+	end
+	
+	fadeOutClone(cloneInstance)
+end
+
 function CloneModule:Init(sanityModule)
 	task.spawn(function()
 		while true do
@@ -121,10 +153,7 @@ function CloneModule:Init(sanityModule)
 			local currentSanity = sanityModule:GetSanity()
 			local scaleFactor = math.clamp(currentSanity / 100, 0.1, 1)
 			
-			-- Check if the player is completely alone in the server
 			local isSoloServer = (#Players:GetPlayers() == 1)
-			
-			-- Adjust spawn threshold (spawns less often when solo)
 			local baseChance = isSoloServer and (CONFIG.BaseSpawnChance * CONFIG.SoloSpawnChanceMultiplier) or CONFIG.BaseSpawnChance
 			local chanceThreshold = math.floor(baseChance * scaleFactor)
 			
@@ -134,12 +163,10 @@ function CloneModule:Init(sanityModule)
 					local targetChar = nil
 					
 					if isSoloServer then
-						-- Solo version: Clone the local player itself as the "[REDACTED]" variant
 						localChar.Archivable = true
 						targetChar = localChar:Clone()
 						localChar.Archivable = false
 					else
-						-- Standard version: Choose a random other player
 						local otherPlayers = {}
 						for _, p in ipairs(Players:GetPlayers()) do
 							if p ~= localPlayer and p.Character then
@@ -177,11 +204,9 @@ function CloneModule:Init(sanityModule)
 							end
 						end
 						
-						-- Apply appearance modifications
 						for _, part in ipairs(targetChar:GetDescendants()) do
 							if part:IsA("BasePart") then
 								if isSoloServer then
-									-- Voided out look: Pitch black parts with a dark material effect
 									part.Color = Color3.fromRGB(0, 0, 0)
 									part.Material = Enum.Material.SmoothPlastic
 								else
@@ -190,9 +215,16 @@ function CloneModule:Init(sanityModule)
 								part.CanCollide = false
 							elseif part:IsA("Decal") or part:IsA("Texture") then
 								if isSoloServer then
-									part.Transparency = 0.8 -- Semi-transparent void aesthetic
+									part.Transparency = 0.8
 								end
 							end
+						end
+						
+						-- Ensure a humanoid exists for pathfinding/movement during chases
+						local humanoid = targetChar:FindFirstChildOfClass("Humanoid")
+						if not humanoid then
+							humanoid = Instance.new("Humanoid")
+							humanoid.Parent = targetChar
 						end
 						
 						local localRoot = localChar.HumanoidRootPart
@@ -229,11 +261,16 @@ function CloneModule:Init(sanityModule)
 						local cloneData = {
 							Instance = targetChar,
 							IsSoloVariant = isSoloServer,
+							SpawnTick = tick(),
+							StareTime = 0,
+							IsChasing = false,
+							ChaseStartTime = 0,
 						}
 						table.insert(activeClones, cloneData)
 						
-						task.delay(8, function()
-							if targetChar and targetChar.Parent then
+						local lifespan = isSoloServer and CONFIG.SoloLifespan or 8
+						task.delay(lifespan, function()
+							if targetChar and targetChar.Parent and not cloneData.IsChasing then
 								fadeOutClone(targetChar)
 							end
 						end)
@@ -280,7 +317,7 @@ function CloneModule:Init(sanityModule)
 		end
 	end
 	
-	RunService.RenderStepped:Connect(function()
+	RunService.RenderStepped:Connect(function(dt)
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
 		local localRoot = localChar.HumanoidRootPart
@@ -292,20 +329,84 @@ function CloneModule:Init(sanityModule)
 			
 			if clone and clone.Parent and clone:FindFirstChild("Head") and clone:FindFirstChild("HumanoidRootPart") then
 				local cloneRoot = clone.HumanoidRootPart
+				local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
 				
-				local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
-				clone:PivotTo(lookCFrame)
-				
-				if (cloneRoot.Position - localPos).Magnitude < CONFIG.ProximityPenaltyRange then
-					table.remove(activeClones, i)
-					triggerPenalty(clone, sanityModule, cloneData.IsSoloVariant)
-				else
-					if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
-						cloneData.NextChatTime = tick() + math.random(120, 200) / 100
+				-- Handle [REDACTED] Solo Chase Mechanics
+				if cloneData.IsSoloVariant then
+					if not cloneData.IsChasing then
+						-- Check if player is looking at the clone (Camera look vector dot product check)
+						local cameraCFrame = Camera.CFrame
+						local lookVector = cameraCFrame.LookVector
+						local directionToClone = (cloneRoot.Position - cameraCFrame.Position).Unit
+						local dotProduct = lookVector:Dot(directionToClone)
 						
-						local phrase = getRandomPhrase(cloneData.IsSoloVariant)
-						local scrambled = scrambleText(phrase)
-						ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
+						-- If looking roughly toward the clone (within ~45 degrees) and within range
+						if dotProduct > 0.7 and (cloneRoot.Position - localPos).Magnitude < 35 then
+							cloneData.StareTime = cloneData.StareTime + dt
+							if cloneData.StareTime >= CONFIG.StareDurationToTrigger then
+								cloneData.IsChasing = true
+								cloneData.ChaseStartTime = tick()
+							end
+						else
+							-- Decay stare time slowly if looking away
+							cloneData.StareTime = math.max(0, cloneData.StareTime - (dt * 0.5))
+						end
+					else
+						-- During Chase State
+						local chaseElapsed = tick() - cloneData.ChaseStartTime
+						if chaseElapsed >= CONFIG.ChaseDuration then
+							-- Chase ends after 10 seconds, despawn clone
+							table.remove(activeClones, i)
+							fadeOutClone(clone)
+						else
+							-- Calculate progressive speed and void screen effect
+							local chaseProgress = chaseElapsed / CONFIG.ChaseDuration
+							local currentSpeed = CONFIG.BaseChaseSpeed + (CONFIG.MaxChaseSpeed - CONFIG.BaseChaseSpeed) * chaseProgress
+							
+							if cloneHumanoid then
+								cloneHumanoid:MoveTo(localPos)
+								cloneHumanoid.WalkSpeed = currentSpeed
+							end
+							
+							-- Fill screen with void/darkness effect proportional to proximity/progress
+							local colorCorr = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+							if not colorCorr then
+								colorCorr = Instance.new("ColorCorrectionEffect")
+								colorCorr.Parent = Lighting
+							end
+							colorCorr.TintColor = Color3.fromRGB(15 + math.floor(40 * (1 - chaseProgress)), 0, 30)
+							colorCorr.Saturation = -1 - (chaseProgress * 3)
+							colorCorr.Contrast = 1 + (chaseProgress * 2)
+							
+							-- Check if clone catches the player
+							if (cloneRoot.Position - localPos).Magnitude < CONFIG.CatchDistance then
+								table.remove(activeClones, i)
+								-- Reset color correction
+								colorCorr.TintColor = Color3.fromRGB(255, 255, 255)
+								colorCorr.Saturation = 0
+								colorCorr.Contrast = 0
+								triggerCatch(clone)
+							end
+						end
+					end
+				end
+				
+				-- Standard head tracking & proximity checks
+				if not cloneData.IsChasing then
+					local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
+					clone:PivotTo(lookCFrame)
+					
+					if (cloneRoot.Position - localPos).Magnitude < CONFIG.ProximityPenaltyRange then
+						table.remove(activeClones, i)
+						triggerPenalty(clone, sanityModule, cloneData.IsSoloVariant)
+					else
+						if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
+							cloneData.NextChatTime = tick() + math.random(120, 200) / 100
+							
+							local phrase = getRandomPhrase(cloneData.IsSoloVariant)
+							local scrambled = scrambleText(phrase)
+							ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
+						end
 					end
 				end
 			else
