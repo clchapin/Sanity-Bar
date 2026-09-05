@@ -1,6 +1,6 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Updated with "[REDACTED]" Stare-Chase Mechanic)
--- Upload this updated raw script to your GitHub repository.
+-- MODULE SCRIPT: CloneManager (Fixed Proximity & Chase Catch Penalty)
+-- Upload this updated script to your GitHub repository.
 -- =================================================================
 
 local CONFIG = {
@@ -18,24 +18,25 @@ local CONFIG = {
 	ChasePhrases = {
 		"we shall become one"
 	},
-	SpawnCheckInterval = 1.5,
-	BaseSpawnChance = 20,
-	SoloSpawnChanceMultiplier = 2,
-	MinSpawnDistance = 10,
-	MaxSpawnDistance = 22,
+	SpawnCheckInterval = 1.0,
+	BaseSpawnChance = 5,
+	SoloSpawnChanceMultiplier = 1,
+	MinSpawnDistance = 8,
+	MaxSpawnDistance = 18,
+	ProximityPenaltyRange = 6,  -- Increased slightly for reliable detection
 	StandardPenalty = 15,
 	SoloPenalty = 25,
 	ChatTriggerRange = 6,
 	FadeDuration = 2.0,
 	
-	-- [REDACTED] Chase Configuration
-	SoloLifespan = 30,         -- Despawns after 30 seconds if alone
-	StareDurationToTrigger = 5, -- Looking at it for 5 seconds triggers the chase
-	ChaseDuration = 10,        -- Chase lasts for 10 seconds max
-	CatchDistance = 3,         -- Distance to trigger being caught
-	DamageAmount = 60,         -- Damage dealt if caught
-	BaseChaseSpeed = 16,       -- Initial chase walkspeed
-	MaxChaseSpeed = 28         -- Maximum chase walkspeed
+	SoloLifespan = 30,
+	StareDurationToTrigger = 5,
+	ChaseDuration = 10,
+	CatchDistance = 4,         -- Increased slightly to ensure catches register properly
+	DamageAmount = 60,
+	CatchSanityPenalty = 15,   -- 15 sanity loss on top of 60 HP loss when caught
+	BaseChaseSpeed = 16,
+	MaxChaseSpeed = 28
 }
 
 local Players = game:GetService("Players")
@@ -125,8 +126,7 @@ local function triggerPenalty(cloneInstance, sanityModule, isSolo)
 	end)
 end
 
--- Triggered when [REDACTED] catches the player during a chase
-local function triggerCatch(cloneInstance)
+local function triggerCatch(cloneInstance, sanityModule)
 	if not cloneInstance or not cloneInstance.Parent then return end
 	
 	local head = cloneInstance:FindFirstChild("Head")
@@ -134,12 +134,17 @@ local function triggerCatch(cloneInstance)
 		ChatService:Chat(head, "we shall become one", Enum.ChatColor.Red)
 	end
 	
+	-- Apply 60 HP damage and 15 sanity loss
 	local localChar = localPlayer.Character
 	if localChar then
 		local humanoid = localChar:FindFirstChildOfClass("Humanoid")
 		if humanoid then
 			humanoid.Health = math.max(0, humanoid.Health - CONFIG.DamageAmount)
 		end
+	end
+	
+	if sanityModule and sanityModule.ModifySanity then
+		sanityModule:ModifySanity(-CONFIG.CatchSanityPenalty)
 	end
 	
 	fadeOutClone(cloneInstance)
@@ -209,18 +214,18 @@ function CloneModule:Init(sanityModule)
 								if isSoloServer then
 									part.Color = Color3.fromRGB(0, 0, 0)
 									part.Material = Enum.Material.SmoothPlastic
+									part.Transparency = 0
 								else
 									part.Color = part.Color:Lerp(Color3.fromRGB(130, 20, 160), 0.35)
 								end
 								part.CanCollide = false
 							elseif part:IsA("Decal") or part:IsA("Texture") then
 								if isSoloServer then
-									part.Transparency = 0.8
+									part.Transparency = 0.5
 								end
 							end
 						end
 						
-						-- Ensure a humanoid exists for pathfinding/movement during chases
 						local humanoid = targetChar:FindFirstChildOfClass("Humanoid")
 						if not humanoid then
 							humanoid = Instance.new("Humanoid")
@@ -228,34 +233,11 @@ function CloneModule:Init(sanityModule)
 						end
 						
 						local localRoot = localChar.HumanoidRootPart
-						local spawnPos
-						local validSpawn = false
-						local attempts = 0
+						local randomAngle = math.random() * math.pi * 2
+						local randomDist = math.random(CONFIG.MinSpawnDistance, CONFIG.MaxSpawnDistance)
+						local spawnPos = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 3, math.sin(randomAngle) * randomDist)
 						
-						repeat
-							attempts = attempts + 1
-							local randomAngle = math.random() * math.pi * 2
-							local randomDist = math.random(CONFIG.MinSpawnDistance, CONFIG.MaxSpawnDistance)
-							local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
-							
-							local raycastParams = RaycastParams.new()
-							raycastParams.FilterDescendantsInstances = {localChar}
-							raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-							
-							local rayResult = Workspace:Raycast(rayOrigin, Vector3.new(0, -25, 0), raycastParams)
-							if rayResult then
-								spawnPos = rayResult.Position
-								if (spawnPos - localRoot.Position).Magnitude >= (CONFIG.MinSpawnDistance - 2) then
-									validSpawn = true
-								end
-							end
-						until validSpawn or attempts > 5
-						
-						if not spawnPos then
-							spawnPos = localRoot.Position + Vector3.new(12, 0, 0)
-						end
-						
-						targetChar:PivotTo(CFrame.new(spawnPos + Vector3.new(0, 3, 0)))
+						targetChar:PivotTo(CFrame.new(spawnPos))
 						targetChar.Parent = Workspace
 						
 						local cloneData = {
@@ -331,35 +313,31 @@ function CloneModule:Init(sanityModule)
 				local cloneRoot = clone.HumanoidRootPart
 				local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
 				
-				-- Handle [REDACTED] Solo Chase Mechanics
+				-- Use horizontal distance (ignoring minor Y-axis differences) for reliable detection
+				local horizontalDist = (Vector3.new(cloneRoot.Position.X, 0, cloneRoot.Position.Z) - Vector3.new(localPos.X, 0, localPos.Z)).Magnitude
+				
 				if cloneData.IsSoloVariant then
 					if not cloneData.IsChasing then
-						-- Check if player is looking at the clone (Camera look vector dot product check)
 						local cameraCFrame = Camera.CFrame
 						local lookVector = cameraCFrame.LookVector
 						local directionToClone = (cloneRoot.Position - cameraCFrame.Position).Unit
 						local dotProduct = lookVector:Dot(directionToClone)
 						
-						-- If looking roughly toward the clone (within ~45 degrees) and within range
-						if dotProduct > 0.7 and (cloneRoot.Position - localPos).Magnitude < 35 then
+						if dotProduct > 0.7 and horizontalDist < 35 then
 							cloneData.StareTime = cloneData.StareTime + dt
 							if cloneData.StareTime >= CONFIG.StareDurationToTrigger then
 								cloneData.IsChasing = true
 								cloneData.ChaseStartTime = tick()
 							end
 						else
-							-- Decay stare time slowly if looking away
 							cloneData.StareTime = math.max(0, cloneData.StareTime - (dt * 0.5))
 						end
 					else
-						-- During Chase State
 						local chaseElapsed = tick() - cloneData.ChaseStartTime
 						if chaseElapsed >= CONFIG.ChaseDuration then
-							-- Chase ends after 10 seconds, despawn clone
 							table.remove(activeClones, i)
 							fadeOutClone(clone)
 						else
-							-- Calculate progressive speed and void screen effect
 							local chaseProgress = chaseElapsed / CONFIG.ChaseDuration
 							local currentSpeed = CONFIG.BaseChaseSpeed + (CONFIG.MaxChaseSpeed - CONFIG.BaseChaseSpeed) * chaseProgress
 							
@@ -368,7 +346,6 @@ function CloneModule:Init(sanityModule)
 								cloneHumanoid.WalkSpeed = currentSpeed
 							end
 							
-							-- Fill screen with void/darkness effect proportional to proximity/progress
 							local colorCorr = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
 							if not colorCorr then
 								colorCorr = Instance.new("ColorCorrectionEffect")
@@ -378,25 +355,22 @@ function CloneModule:Init(sanityModule)
 							colorCorr.Saturation = -1 - (chaseProgress * 3)
 							colorCorr.Contrast = 1 + (chaseProgress * 2)
 							
-							-- Check if clone catches the player
-							if (cloneRoot.Position - localPos).Magnitude < CONFIG.CatchDistance then
+							if horizontalDist < CONFIG.CatchDistance then
 								table.remove(activeClones, i)
-								-- Reset color correction
 								colorCorr.TintColor = Color3.fromRGB(255, 255, 255)
 								colorCorr.Saturation = 0
 								colorCorr.Contrast = 0
-								triggerCatch(clone)
+								triggerCatch(clone, sanityModule)
 							end
 						end
 					end
 				end
 				
-				-- Standard head tracking & proximity checks
 				if not cloneData.IsChasing then
 					local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
 					clone:PivotTo(lookCFrame)
 					
-					if (cloneRoot.Position - localPos).Magnitude < CONFIG.ProximityPenaltyRange then
+					if horizontalDist < CONFIG.ProximityPenaltyRange then
 						table.remove(activeClones, i)
 						triggerPenalty(clone, sanityModule, cloneData.IsSoloVariant)
 					else
