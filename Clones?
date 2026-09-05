@@ -1,0 +1,286 @@
+-- =================================================================
+-- MODULE SCRIPT: CloneManager (Doppelgänger Spawner & AI Mechanics)
+-- Upload this raw script to your GitHub repository to manage the clones.
+-- =================================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+local Camera = workspace.CurrentCamera
+
+local localPlayer = Players.LocalPlayer
+local activeClones = {}
+local isGlitching = false
+
+local CloneModule = {}
+
+-- Trigger glitch penalty effect when running into a clone (< 3 studs)
+local function triggerPenalty(cloneInstance, sanityModule)
+	if isGlitching then return end
+	isGlitching = true
+	
+	if sanityModule and sanityModule.ModifySanity then
+		sanityModule:ModifySanity(-15)
+	end
+	
+	if cloneInstance and cloneInstance.Parent then
+		for _, part in ipairs(cloneInstance:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Transparency = 1
+			elseif part:IsA("Decal") or part:IsA("Texture") then
+				part.Transparency = 1
+			end
+		end
+		task.delay(0.5, function()
+			if cloneInstance and cloneInstance.Parent then
+				cloneInstance:Destroy()
+			end
+		end)
+	end
+	
+	task.spawn(function()
+		local endTime = tick() + 5
+		while tick() < endTime do
+			local colorCorr = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+			if not colorCorr then
+				colorCorr = Instance.new("ColorCorrectionEffect")
+				colorCorr.Parent = Lighting
+			end
+			colorCorr.TintColor = Color3.fromRGB(200, 0, 255)
+			colorCorr.Saturation = -3
+			colorCorr.Contrast = 2
+			Camera.CFrame = Camera.CFrame * CFrame.new(math.random(-1, 1) * 0.4, math.random(-1, 1) * 0.4, 0)
+			RunService.RenderStepped:Wait()
+		end
+		local colorCorr = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+		if colorCorr then
+			colorCorr.TintColor = Color3.fromRGB(255, 255, 255)
+			colorCorr.Saturation = 0
+			colorCorr.Contrast = 0
+		end
+		isGlitching = false
+	end)
+end
+
+function CloneModule:Init(sanityModule)
+	-- 1. Doppelgänger Spawner Loop (runs every 1 second)
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			
+			local currentSanity = sanityModule:GetSanity()
+			-- Scale spawn probability: At 100 sanity chance is 1/10 (10%). Lower sanity increases frequency.
+			local scaleFactor = math.clamp(currentSanity / 100, 0.1, 1)
+			local chanceThreshold = math.floor(10 * scaleFactor)
+			
+			if math.random(1, chanceThreshold) == 1 then
+				local otherPlayers = {}
+				for _, p in ipairs(Players:GetPlayers()) do
+					if p ~= localPlayer and p.Character then
+						local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+						local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
+						if hrp and humanoid and humanoid.Health > 0 then
+							table.insert(otherPlayers, p)
+						end
+					end
+				end
+				
+				local localChar = localPlayer.Character
+				if #otherPlayers > 0 and localChar and localChar:FindFirstChild("HumanoidRootPart") then
+					local targetPlayer = otherPlayers[math.random(1, #otherPlayers)]
+					if targetPlayer and targetPlayer.Character then
+						local targetChar = targetPlayer.Character
+						local targetHrp = targetChar:FindFirstChild("HumanoidRootPart")
+						
+						if targetHrp then
+							targetChar.Archivable = true
+							local clone = targetChar:Clone()
+							targetChar.Archivable = false
+							
+							if clone then
+								clone.Name = "WrongClone"
+								
+								for _, child in ipairs(clone:GetDescendants()) do
+									if child:IsA("Script") or child:IsA("LocalScript") then
+										child:Destroy()
+									end
+								end
+								
+								for _, child in ipairs(clone:GetChildren()) do
+									if child:IsA("Accessory") and math.random() > 0.4 then
+										child:Destroy()
+									end
+								end
+								
+								for _, part in ipairs(clone:GetDescendants()) do
+									if part:IsA("BasePart") then
+										part.Color = part.Color:Lerp(Color3.fromRGB(130, 20, 160), 0.35)
+										part.CanCollide = false
+									end
+								end
+								
+								local head = clone:FindFirstChild("Head")
+								local billboard, textLabel
+								if head then
+									billboard = Instance.new("BillboardGui")
+									billboard.Size = UDim2.new(0, 200, 0, 50)
+									billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+									billboard.AlwaysOnTop = true
+									billboard.Parent = head
+									
+									textLabel = Instance.new("TextLabel")
+									textLabel.Size = UDim2.new(1, 0, 1, 0)
+									textLabel.BackgroundTransparency = 1
+									textLabel.TextColor3 = Color3.fromRGB(180, 0, 255)
+									textLabel.TextScaled = true
+									textLabel.Font = Enum.Font.Code
+									textLabel.Text = ""
+									textLabel.Parent = billboard
+								end
+								
+								-- Ensure spawn position is outside a safe radius from the player (prevents spawning directly on them)
+								local localRoot = localChar.HumanoidRootPart
+								local spawnPos
+								local validSpawn = false
+								local attempts = 0
+								
+								repeat
+									attempts = attempts + 1
+									local randomAngle = math.random() * math.pi * 2
+									local randomDist = math.random(8, 18) -- Minimum 8 studs away from player
+									local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
+									
+									local raycastParams = RaycastParams.new()
+									raycastParams.FilterDescendantsInstances = {localChar}
+									raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+									
+									local rayResult = Workspace:Raycast(rayOrigin, Vector3.new(0, -25, 0), raycastParams)
+									if rayResult then
+										spawnPos = rayResult.Position
+										if (spawnPos - localRoot.Position).Magnitude >= 6 then
+											validSpawn = true
+										end
+									end
+								until validSpawn or attempts > 5
+								
+								if not spawnPos then
+									spawnPos = localRoot.Position + Vector3.new(10, 0, 0)
+								end
+								
+								clone:PivotTo(CFrame.new(spawnPos + Vector3.new(0, 3, 0)))
+								clone.Parent = Workspace
+								
+								local cloneData = {
+									Instance = clone,
+									TextLabel = textLabel,
+									Billboard = billboard,
+								}
+								table.insert(activeClones, cloneData)
+								
+								task.delay(8, function()
+									if clone and clone.Parent then
+										clone:Destroy()
+									end
+								end)
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+	
+	-- 2. Chat listener to detect local player chatting within 5 studs of a clone
+	localPlayer.Chatted:Connect(function(message)
+		local localChar = localPlayer.Character
+		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
+		local localPos = localChar.HumanoidRootPart.Position
+		
+		for _, cloneData in ipairs(activeClones) do
+			local clone = cloneData.Instance
+			if clone and clone.Parent and clone:FindFirstChild("HumanoidRootPart") then
+				local cloneRoot = clone.HumanoidRootPart
+				
+				if (cloneRoot.Position - localPos).Magnitude <= 5 then
+					if cloneData.TextLabel then
+						local basePhrase = "you are so intriguing"
+						local scrambled = ""
+						for c = 1, #basePhrase do
+							local char = basePhrase:sub(c, c)
+							if char ~= " " and math.random() > 0.2 then
+								scrambled = scrambled .. string.char(math.random(33, 126))
+							else
+								scrambled = scrambled .. char
+							end
+						end
+						cloneData.TextLabel.Text = scrambled
+						
+						task.delay(2, function()
+							if cloneData.TextLabel then
+								cloneData.TextLabel.Text = ""
+							end
+						end)
+					end
+					break
+				end
+			end
+		end
+	end)
+	
+	-- 3. Render Loop for head tracking, proximity checks, and periodic clone dialogue
+	RunService.RenderStepped:Connect(function()
+		local localChar = localPlayer.Character
+		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
+		local localRoot = localChar.HumanoidRootPart
+		local localPos = localRoot.Position
+		
+		for i = #activeClones, 1, -1 do
+			local cloneData = activeClones[i]
+			local clone = cloneData.Instance
+			
+			if clone and clone.Parent and clone:FindFirstChild("HumanoidRootPart") then
+				local cloneRoot = clone.HumanoidRootPart
+				
+				-- Track player rotation
+				local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
+				clone:PivotTo(lookCFrame)
+				
+				-- Check collision/distance threshold (< 3 studs)
+				if (cloneRoot.Position - localPos).Magnitude < 3 then
+					table.remove(activeClones, i)
+					triggerPenalty(clone, sanityModule)
+				else
+					-- Periodic jumbled text output (every 0.9 to 1.5 seconds)
+					if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
+						cloneData.NextChatTime = tick() + math.random(90, 150) / 100
+						
+						if cloneData.TextLabel then
+							local basePhrase = "you are so intriguing"
+							local scrambled = ""
+							for c = 1, #basePhrase do
+								local char = basePhrase:sub(c, c)
+								if char ~= " " and math.random() > 0.2 then
+									scrambled = scrambled .. string.char(math.random(33, 126))
+								else
+									scrambled = scrambled .. char
+								end
+							end
+							cloneData.TextLabel.Text = scrambled
+							
+							task.delay(1.2, function()
+								if cloneData.TextLabel then
+									cloneData.TextLabel.Text = ""
+								end
+							end)
+						end
+					end
+				end
+			else
+				table.remove(activeClones, i)
+			end
+		end
+	end)
+end
+
+return CloneModule
