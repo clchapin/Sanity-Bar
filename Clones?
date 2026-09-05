@@ -1,5 +1,5 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Fixed Proximity & Chase Catch Penalty)
+-- MODULE SCRIPT: CloneManager (Idle Copy Animation, Speed Boost, Blind Follow)
 -- Upload this updated script to your GitHub repository.
 -- =================================================================
 
@@ -23,7 +23,7 @@ local CONFIG = {
 	SoloSpawnChanceMultiplier = 1,
 	MinSpawnDistance = 8,
 	MaxSpawnDistance = 18,
-	ProximityPenaltyRange = 6,  -- Increased slightly for reliable detection
+	ProximityPenaltyRange = 6,
 	StandardPenalty = 15,
 	SoloPenalty = 25,
 	ChatTriggerRange = 6,
@@ -32,11 +32,19 @@ local CONFIG = {
 	SoloLifespan = 30,
 	StareDurationToTrigger = 5,
 	ChaseDuration = 10,
-	CatchDistance = 4,         -- Increased slightly to ensure catches register properly
+	CatchDistance = 4,
 	DamageAmount = 60,
-	CatchSanityPenalty = 15,   -- 15 sanity loss on top of 60 HP loss when caught
+	CatchSanityPenalty = 15,
 	BaseChaseSpeed = 16,
-	MaxChaseSpeed = 28
+	MaxChaseSpeed = 28,
+	
+	-- Speed boost configuration when chase starts
+	PlayerSpeedBoostAmount = 8,
+	PlayerSpeedBoostDuration = 3.0,
+	
+	-- Blind follow settings for [REDACTED]
+	BlindFollowSpeed = 12,
+	BlindFollowStopDistance = 4
 }
 
 local Players = game:GetService("Players")
@@ -91,6 +99,22 @@ local function fadeOutClone(cloneInstance)
 	end)
 end
 
+-- Apply a temporary speed boost to the player when chase begins
+local function applyPlayerSpeedBoost()
+	local localChar = localPlayer.Character
+	if not localChar then return end
+	local humanoid = localChar:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local originalSpeed = humanoid.WalkSpeed
+		humanoid.WalkSpeed = originalSpeed + CONFIG.PlayerSpeedBoostAmount
+		task.delay(CONFIG.PlayerSpeedBoostDuration, function()
+			if humanoid and humanoid.Parent then
+				humanoid.WalkSpeed = originalSpeed
+			end
+		end)
+	end
+end
+
 local function triggerPenalty(cloneInstance, sanityModule, isSolo)
 	if isGlitching then return end
 	isGlitching = true
@@ -134,7 +158,6 @@ local function triggerCatch(cloneInstance, sanityModule)
 		ChatService:Chat(head, "we shall become one", Enum.ChatColor.Red)
 	end
 	
-	-- Apply 60 HP damage and 15 sanity loss
 	local localChar = localPlayer.Character
 	if localChar then
 		local humanoid = localChar:FindFirstChildOfClass("Humanoid")
@@ -203,9 +226,30 @@ function CloneModule:Init(sanityModule)
 							end
 						end
 						
-						for _, child in ipairs(targetChar:GetChildren()) do
-							if child:IsA("Accessory") and not isSoloServer and math.random() > 0.4 then
-								child:Destroy()
+						-- Setup animator tracking for idle/pose replication
+						local targetHumanoid = targetChar:FindFirstChildOfClass("Humanoid")
+						if not targetHumanoid then
+							targetHumanoid = Instance.new("Humanoid")
+							targetHumanoid.Parent = targetChar
+						end
+						
+						local animController = targetChar:FindFirstChildOfClass("AnimationController")
+						if not animController then
+							animController = Instance.new("AnimationController")
+							animController.Parent = targetChar
+						end
+						
+						-- Try to copy active idle/pose animations from the source character
+						local sourceHumanoid = (isSoloServer and localChar or nil)
+						local sourceAnimator = sourceHumanoid and sourceHumanoid:FindFirstChildOfClass("Animator")
+						local cloneAnimator = targetHumanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", targetHumanoid)
+						
+						if sourceAnimator then
+							for _, track in ipairs(sourceAnimator:GetPlayingAnimationTracks()) do
+								local newTrack = cloneAnimator:LoadAnimation(track.Animation)
+								newTrack:Play()
+								newTrack.TimePosition = track.TimePosition
+								newTrack:AdjustSpeed(track.Speed)
 							end
 						end
 						
@@ -224,12 +268,6 @@ function CloneModule:Init(sanityModule)
 									part.Transparency = 0.5
 								end
 							end
-						end
-						
-						local humanoid = targetChar:FindFirstChildOfClass("Humanoid")
-						if not humanoid then
-							humanoid = Instance.new("Humanoid")
-							humanoid.Parent = targetChar
 						end
 						
 						local localRoot = localChar.HumanoidRootPart
@@ -313,26 +351,36 @@ function CloneModule:Init(sanityModule)
 				local cloneRoot = clone.HumanoidRootPart
 				local cloneHumanoid = clone:FindFirstChildOfClass("Humanoid")
 				
-				-- Use horizontal distance (ignoring minor Y-axis differences) for reliable detection
 				local horizontalDist = (Vector3.new(cloneRoot.Position.X, 0, cloneRoot.Position.Z) - Vector3.new(localPos.X, 0, localPos.Z)).Magnitude
+				
+				-- Check camera view angle for Stare / Look verification
+				local cameraCFrame = Camera.CFrame
+				local lookVector = cameraCFrame.LookVector
+				local directionToClone = (cloneRoot.Position - cameraCFrame.Position).Unit
+				local dotProduct = lookVector:Dot(directionToClone)
+				local isLookingAtClone = (dotProduct > 0.7 and horizontalDist < 35)
 				
 				if cloneData.IsSoloVariant then
 					if not cloneData.IsChasing then
-						local cameraCFrame = Camera.CFrame
-						local lookVector = cameraCFrame.LookVector
-						local directionToClone = (cloneRoot.Position - cameraCFrame.Position).Unit
-						local dotProduct = lookVector:Dot(directionToClone)
-						
-						if dotProduct > 0.7 and horizontalDist < 35 then
+						if isLookingAtClone then
+							-- Accumulate stare time to trigger chase
 							cloneData.StareTime = cloneData.StareTime + dt
 							if cloneData.StareTime >= CONFIG.StareDurationToTrigger then
 								cloneData.IsChasing = true
 								cloneData.ChaseStartTime = tick()
+								applyPlayerSpeedBoost()
 							end
 						else
+							-- When NOT looking at [REDACTED], it stalks/follows you quietly
 							cloneData.StareTime = math.max(0, cloneData.StareTime - (dt * 0.5))
+							
+							if cloneHumanoid and horizontalDist > CONFIG.BlindFollowStopDistance then
+								cloneHumanoid:MoveTo(localPos)
+								cloneHumanoid.WalkSpeed = CONFIG.BlindFollowSpeed
+							end
 						end
 					else
+						-- Full Chase State
 						local chaseElapsed = tick() - cloneData.ChaseStartTime
 						if chaseElapsed >= CONFIG.ChaseDuration then
 							table.remove(activeClones, i)
@@ -367,8 +415,11 @@ function CloneModule:Init(sanityModule)
 				end
 				
 				if not cloneData.IsChasing then
-					local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
-					clone:PivotTo(lookCFrame)
+					-- When not chasing, maintain head tracking or normal look behavior
+					if not (cloneData.IsSoloVariant and not isLookingAtClone) then
+						local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
+						clone:PivotTo(lookCFrame)
+					end
 					
 					if horizontalDist < CONFIG.ProximityPenaltyRange then
 						table.remove(activeClones, i)
