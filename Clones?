@@ -1,7 +1,25 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Updated with Smooth Fading, Lower Spawns, and Refined Chat)
+-- MODULE SCRIPT: CloneManager (Configurable Phrases, Better Chat, 2s Fade)
 -- Upload this updated raw script to your GitHub repository.
 -- =================================================================
+
+-- CONFIGURATION (Customize clone phrases and timing at the top)
+local CONFIG = {
+	Phrases = {
+		"you are so intriguing",
+		"i see you",
+		"don't look away",
+		"why are you running",
+		"look at me"
+	},
+	SpawnCheckInterval = 1.5,
+	BaseSpawnChance = 20, -- 1/20 chance at 100 sanity
+	MinSpawnDistance = 10,
+	MaxSpawnDistance = 22,
+	ProximityPenaltyRange = 3,
+	ChatTriggerRange = 6,
+	FadeDuration = 2.0 -- Fade out duration set to 2 seconds
+}
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -17,11 +35,30 @@ local isGlitching = false
 
 local CloneModule = {}
 
--- Smoothly fade out clone parts and decals before destroying
+-- Helper to get a random configured phrase
+local function getRandomPhrase()
+	return CONFIG.Phrases[math.random(1, #CONFIG.Phrases)]
+end
+
+-- Scramble phrase characters
+local function scrambleText(text)
+	local scrambled = ""
+	for c = 1, #text do
+		local char = text:sub(c, c)
+		if char ~= " " and math.random() > 0.2 then
+			scrambled = scrambled .. string.char(math.random(33, 126))
+		else
+			scrambled = scrambled .. char
+		end
+	end
+	return scrambled
+end
+
+-- Smoothly fade out clone parts over the configured fade duration (2 seconds)
 local function fadeOutClone(cloneInstance)
 	if not cloneInstance or not cloneInstance.Parent then return end
 	
-	local tweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tweenInfo = TweenInfo.new(CONFIG.FadeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	
 	for _, desc in ipairs(cloneInstance:GetDescendants()) do
 		if desc:IsA("BasePart") then
@@ -31,14 +68,14 @@ local function fadeOutClone(cloneInstance)
 		end
 	end
 	
-	task.delay(0.7, function()
+	task.delay(CONFIG.FadeDuration + 0.1, function()
 		if cloneInstance and cloneInstance.Parent then
 			cloneInstance:Destroy()
 		end
 	end)
 end
 
--- Trigger visual glitched penalty and sanity reduction when within 3 studs
+-- Trigger visual glitched penalty and sanity reduction when within proximity range
 local function triggerPenalty(cloneInstance, sanityModule)
 	if isGlitching then return end
 	isGlitching = true
@@ -74,14 +111,14 @@ local function triggerPenalty(cloneInstance, sanityModule)
 end
 
 function CloneModule:Init(sanityModule)
-	-- 1. Spawner Loop: Made less frequent (1/20 chance at 100 sanity, scaling up as sanity drops)
+	-- 1. Spawner Loop
 	task.spawn(function()
 		while true do
-			task.wait(1.5)
+			task.wait(CONFIG.SpawnCheckInterval)
 			
 			local currentSanity = sanityModule:GetSanity()
 			local scaleFactor = math.clamp(currentSanity / 100, 0.1, 1)
-			local chanceThreshold = math.floor(20 * scaleFactor)
+			local chanceThreshold = math.floor(CONFIG.BaseSpawnChance * scaleFactor)
 			
 			if math.random(1, chanceThreshold) == 1 then
 				local otherPlayers = {}
@@ -138,7 +175,7 @@ function CloneModule:Init(sanityModule)
 								repeat
 									attempts = attempts + 1
 									local randomAngle = math.random() * math.pi * 2
-									local randomDist = math.random(10, 22)
+									local randomDist = math.random(CONFIG.MinSpawnDistance, CONFIG.MaxSpawnDistance)
 									local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
 									
 									local raycastParams = RaycastParams.new()
@@ -148,7 +185,7 @@ function CloneModule:Init(sanityModule)
 									local rayResult = Workspace:Raycast(rayOrigin, Vector3.new(0, -25, 0), raycastParams)
 									if rayResult then
 										spawnPos = rayResult.Position
-										if (spawnPos - localRoot.Position).Magnitude >= 8 then
+										if (spawnPos - localRoot.Position).Magnitude >= (CONFIG.MinSpawnDistance - 2) then
 											validSpawn = true
 										end
 									end
@@ -163,11 +200,9 @@ function CloneModule:Init(sanityModule)
 								
 								local cloneData = {
 									Instance = clone,
-									SpawnTime = tick(),
 								}
 								table.insert(activeClones, cloneData)
 								
-								-- Despawn with fade out after 8 seconds
 								task.delay(8, function()
 									if clone and clone.Parent then
 										fadeOutClone(clone)
@@ -181,8 +216,8 @@ function CloneModule:Init(sanityModule)
 		end
 	end)
 	
-	-- 2. Refined Chat Listener: Listens globally to local player chat and verifies proximity to active clones
-	localPlayer.Chatted:Connect(function(message)
+	-- 2. Enhanced Chat Listener: Better range-checked detection supporting modern TextChatService & Legacy chat
+	local function handleChatInteraction()
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
 		local localPos = localChar.HumanoidRootPart.Position
@@ -192,26 +227,36 @@ function CloneModule:Init(sanityModule)
 			if clone and clone.Parent and clone:FindFirstChild("Head") and clone:FindFirstChild("HumanoidRootPart") then
 				local cloneRoot = clone.HumanoidRootPart
 				
-				if (cloneRoot.Position - localPos).Magnitude <= 6 then
-					local basePhrase = "you are so intriguing"
-					local scrambled = ""
-					for c = 1, #basePhrase do
-						local char = basePhrase:sub(c, c)
-						if char ~= " " and math.random() > 0.2 then
-							scrambled = scrambled .. string.char(math.random(33, 126))
-						else
-							scrambled = scrambled .. char
-						end
-					end
-					
+				if (cloneRoot.Position - localPos).Magnitude <= CONFIG.ChatTriggerRange then
+					local phrase = getRandomPhrase()
+					local scrambled = scrambleText(phrase)
 					ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					break
 				end
 			end
 		end
-	end)
+	end
+
+	-- Connect to legacy Chatted event
+	localPlayer.Chatted:Connect(handleChatInteraction)
+
+	-- Connect to modern TextChatService if available to improve responsiveness
+	local TextChatService = game:GetService("TextChatService")
+	if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+		local channels = TextChatService:FindFirstChild("TextChannels")
+		if channels then
+			local generalChannel = channels:FindFirstChild("RBXGeneral")
+			if generalChannel then
+				generalChannel.MessageReceived:Connect(function(textChatMessage)
+					if textChatMessage.TextSource and textChatMessage.TextSource.UserId == localPlayer.UserId then
+						handleChatInteraction()
+					end
+				end)
+			end
+		end
+	end
 	
-	-- 3. Render Loop: Head tracking, proximity penalty checks, and periodic ambient chat bubbles
+	-- 3. Render Loop: Head tracking, proximity checks, and periodic ambient chat bubbles
 	RunService.RenderStepped:Connect(function()
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -228,24 +273,15 @@ function CloneModule:Init(sanityModule)
 				local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
 				clone:PivotTo(lookCFrame)
 				
-				if (cloneRoot.Position - localPos).Magnitude < 3 then
+				if (cloneRoot.Position - localPos).Magnitude < CONFIG.ProximityPenaltyRange then
 					table.remove(activeClones, i)
 					triggerPenalty(clone, sanityModule)
 				else
 					if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
 						cloneData.NextChatTime = tick() + math.random(120, 200) / 100
 						
-						local basePhrase = "you are so intriguing"
-						local scrambled = ""
-						for c = 1, #basePhrase do
-							local char = basePhrase:sub(c, c)
-							if char ~= " " and math.random() > 0.2 then
-								scrambled = scrambled .. string.char(math.random(33, 126))
-							else
-								scrambled = scrambled .. char
-							end
-						end
-						
+						local phrase = getRandomPhrase()
+						local scrambled = scrambleText(phrase)
 						ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					end
 				end
