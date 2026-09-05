@@ -1,6 +1,6 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (GitHub Repository Script)
--- Uses game:GetService("Chat"):Chat() for Roblox built-in chat bubbles
+-- MODULE SCRIPT: CloneManager (Updated with Smooth Fading, Lower Spawns, and Refined Chat)
+-- Upload this updated raw script to your GitHub repository.
 -- =================================================================
 
 local Players = game:GetService("Players")
@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
 local ChatService = game:GetService("Chat")
+local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 
 local localPlayer = Players.LocalPlayer
@@ -15,6 +16,27 @@ local activeClones = {}
 local isGlitching = false
 
 local CloneModule = {}
+
+-- Smoothly fade out clone parts and decals before destroying
+local function fadeOutClone(cloneInstance)
+	if not cloneInstance or not cloneInstance.Parent then return end
+	
+	local tweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	
+	for _, desc in ipairs(cloneInstance:GetDescendants()) do
+		if desc:IsA("BasePart") then
+			TweenService:Create(desc, tweenInfo, {Transparency = 1}):Play()
+		elseif desc:IsA("Decal") or desc:IsA("Texture") then
+			TweenService:Create(desc, tweenInfo, {Transparency = 1}):Play()
+		end
+	end
+	
+	task.delay(0.7, function()
+		if cloneInstance and cloneInstance.Parent then
+			cloneInstance:Destroy()
+		end
+	end)
+end
 
 -- Trigger visual glitched penalty and sanity reduction when within 3 studs
 local function triggerPenalty(cloneInstance, sanityModule)
@@ -25,20 +47,7 @@ local function triggerPenalty(cloneInstance, sanityModule)
 		sanityModule:ModifySanity(-15)
 	end
 	
-	if cloneInstance and cloneInstance.Parent then
-		for _, part in ipairs(cloneInstance:GetDescendants()) do
-			if part:IsA("BasePart") then
-				part.Transparency = 1
-			elseif part:IsA("Decal") or part:IsA("Texture") then
-				part.Transparency = 1
-			end
-		end
-		task.delay(0.5, function()
-			if cloneInstance and cloneInstance.Parent then
-				cloneInstance:Destroy()
-			end
-		end)
-	end
+	fadeOutClone(cloneInstance)
 	
 	task.spawn(function()
 		local endTime = tick() + 5
@@ -65,14 +74,14 @@ local function triggerPenalty(cloneInstance, sanityModule)
 end
 
 function CloneModule:Init(sanityModule)
-	-- 1. Spawner Loop: 1/10 chance per second at 100 sanity, scaling up as sanity decreases
+	-- 1. Spawner Loop: Made less frequent (1/20 chance at 100 sanity, scaling up as sanity drops)
 	task.spawn(function()
 		while true do
-			task.wait(1)
+			task.wait(1.5)
 			
 			local currentSanity = sanityModule:GetSanity()
 			local scaleFactor = math.clamp(currentSanity / 100, 0.1, 1)
-			local chanceThreshold = math.floor(10 * scaleFactor)
+			local chanceThreshold = math.floor(20 * scaleFactor)
 			
 			if math.random(1, chanceThreshold) == 1 then
 				local otherPlayers = {}
@@ -129,7 +138,7 @@ function CloneModule:Init(sanityModule)
 								repeat
 									attempts = attempts + 1
 									local randomAngle = math.random() * math.pi * 2
-									local randomDist = math.random(8, 18)
+									local randomDist = math.random(10, 22)
 									local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
 									
 									local raycastParams = RaycastParams.new()
@@ -139,14 +148,14 @@ function CloneModule:Init(sanityModule)
 									local rayResult = Workspace:Raycast(rayOrigin, Vector3.new(0, -25, 0), raycastParams)
 									if rayResult then
 										spawnPos = rayResult.Position
-										if (spawnPos - localRoot.Position).Magnitude >= 6 then
+										if (spawnPos - localRoot.Position).Magnitude >= 8 then
 											validSpawn = true
 										end
 									end
 								until validSpawn or attempts > 5
 								
 								if not spawnPos then
-									spawnPos = localRoot.Position + Vector3.new(10, 0, 0)
+									spawnPos = localRoot.Position + Vector3.new(12, 0, 0)
 								end
 								
 								clone:PivotTo(CFrame.new(spawnPos + Vector3.new(0, 3, 0)))
@@ -154,12 +163,14 @@ function CloneModule:Init(sanityModule)
 								
 								local cloneData = {
 									Instance = clone,
+									SpawnTime = tick(),
 								}
 								table.insert(activeClones, cloneData)
 								
+								-- Despawn with fade out after 8 seconds
 								task.delay(8, function()
 									if clone and clone.Parent then
-										clone:Destroy()
+										fadeOutClone(clone)
 									end
 								end)
 							end
@@ -170,7 +181,7 @@ function CloneModule:Init(sanityModule)
 		end
 	end)
 	
-	-- 2. Chat Listener: Detects local player chatting within 5 studs using Roblox Chat:Chat() bubble
+	-- 2. Refined Chat Listener: Listens globally to local player chat and verifies proximity to active clones
 	localPlayer.Chatted:Connect(function(message)
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -181,7 +192,7 @@ function CloneModule:Init(sanityModule)
 			if clone and clone.Parent and clone:FindFirstChild("Head") and clone:FindFirstChild("HumanoidRootPart") then
 				local cloneRoot = clone.HumanoidRootPart
 				
-				if (cloneRoot.Position - localPos).Magnitude <= 5 then
+				if (cloneRoot.Position - localPos).Magnitude <= 6 then
 					local basePhrase = "you are so intriguing"
 					local scrambled = ""
 					for c = 1, #basePhrase do
@@ -193,7 +204,6 @@ function CloneModule:Init(sanityModule)
 						end
 					end
 					
-					-- Uses Roblox's built-in chat system to display speech bubbles above the clone's head
 					ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					break
 				end
@@ -201,7 +211,7 @@ function CloneModule:Init(sanityModule)
 		end
 	end)
 	
-	-- 3. Render Loop: Head tracking, proximity detection, and periodic ambient Roblox chat speech bubbles
+	-- 3. Render Loop: Head tracking, proximity penalty checks, and periodic ambient chat bubbles
 	RunService.RenderStepped:Connect(function()
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -223,7 +233,7 @@ function CloneModule:Init(sanityModule)
 					triggerPenalty(clone, sanityModule)
 				else
 					if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
-						cloneData.NextChatTime = tick() + math.random(90, 150) / 100
+						cloneData.NextChatTime = tick() + math.random(120, 200) / 100
 						
 						local basePhrase = "you are so intriguing"
 						local scrambled = ""
