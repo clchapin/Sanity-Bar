@@ -1,5 +1,5 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Max 3 Active Clones Limit & Scrambled "[REDACTEDTEXT]")
+-- MODULE SCRIPT: CloneManager (Vignette Chase & Catch Fade-Out)
 -- Upload this updated script to your GitHub repository.
 -- =================================================================
 
@@ -21,7 +21,7 @@ local CONFIG = {
 	SpawnCheckInterval = 1.0,
 	BaseSpawnChance = 5,
 	SoloSpawnChanceMultiplier = 1,
-	MaxActiveClones = 3,       -- Hard limit of 3 [REDACTED]/clones at once
+	MaxActiveClones = 3,
 	MinSpawnDistance = 8,
 	MaxSpawnDistance = 18,
 	ProximityPenaltyRange = 6,
@@ -58,14 +58,36 @@ local localPlayer = Players.LocalPlayer
 local activeClones = {}
 local isGlitching = false
 
-local CloneModule = {}
+-- Create or retrieve a dedicated Vignette GUI element on the client screen
+local function getOrCreateVignetteGui()
+	local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui") or localPlayer:WaitForChild("PlayerGui")
+	local screenGui = playerGui:FindFirstChild("RedactedVignetteGui")
+	
+	if not screenGui then
+		screenGui = Instance.new("ScreenGui")
+		screenGui.Name = "RedactedVignetteGui"
+		screenGui.IgnoreGuiInset = true
+		screenGui.ResetOnSpawn = false
+		screenGui.Parent = playerGui
+		
+		local vignetteImage = Instance.new("ImageLabel")
+		vignetteImage.Name = "Vignette"
+		vignetteImage.BackgroundTransparency = 1
+		vignetteImage.Size = UDim2.new(1, 0, 1, 0)
+		vignetteImage.Image = "rbxassetid://5141719543" -- Standard clean soft radial vignette asset
+		vignetteImage.ImageColor3 = Color3.fromRGB(0, 0, 0)
+		vignetteImage.ImageTransparency = 1
+		vignetteImage.Parent = screenGui
+	end
+	
+	return screenGui:FindFirstChild("Vignette")
+end
 
 local function getRandomPhrase(isSolo)
 	local list = isSolo and CONFIG.SoloPhrases or CONFIG.StandardPhrases
 	return list[math.random(1, #list)]
 end
 
--- Enhanced [REDACTEDTEXT] generator: Completely replaces text with dense corrupted characters / block symbols
 local function getRedactedText(text)
 	local redactedOutput = ""
 	local symbols = {"█", "▓", "▒", "░", "#", "?", "X", "■"}
@@ -160,10 +182,15 @@ local function triggerCatch(cloneInstance, sanityModule)
 	end
 	
 	local localChar = localPlayer.Character
+	local isLethal = false
 	if localChar then
 		local humanoid = localChar:FindFirstChildOfClass("Humanoid")
 		if humanoid then
-			humanoid.Health = math.max(0, humanoid.Health - CONFIG.DamageAmount)
+			local newHealth = math.max(0, humanoid.Health - CONFIG.DamageAmount)
+			if newHealth <= 0 then
+				isLethal = true
+			end
+			humanoid.Health = newHealth
 		end
 	end
 	
@@ -171,15 +198,39 @@ local function triggerCatch(cloneInstance, sanityModule)
 		sanityModule:ModifySanity(-CONFIG.CatchSanityPenalty)
 	end
 	
+	-- Close in vignette completely upon catch
+	local vignette = getOrCreateVignetteGui()
+	if vignette then
+		local catchTween = TweenService:Create(vignette, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			ImageTransparency = 0,
+			Size = UDim2.new(3, 0, 3, 0),
+			Position = UDim2.new(-1, 0, -1, 0)
+		})
+		catchTween:Play()
+		catchTween.Completed:Wait()
+		
+		-- If lethal, fade out screen fully before resetting vignette
+		if isLethal then
+			task.wait(1.0)
+		end
+		
+		TweenService:Create(vignette, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			ImageTransparency = 1,
+			Size = UDim2.new(1, 0, 1, 0),
+			Position = UDim2.new(0, 0, 0, 0)
+		}):Play()
+	end
+	
 	fadeOutClone(cloneInstance)
 end
+
+local CloneModule = {}
 
 function CloneModule:Init(sanityModule)
 	task.spawn(function()
 		while true do
 			task.wait(CONFIG.SpawnCheckInterval)
 			
-			-- Enforce maximum cap of 3 active clones simultaneously
 			if #activeClones >= CONFIG.MaxActiveClones then
 				continue
 			end
@@ -347,6 +398,9 @@ function CloneModule:Init(sanityModule)
 		local localRoot = localChar.HumanoidRootPart
 		local localPos = localRoot.Position
 		
+		-- Check if any clone is currently chasing to control vignette intensity globally
+		local anyChasing = false
+		
 		for i = #activeClones, 1, -1 do
 			local cloneData = activeClones[i]
 			local clone = cloneData.Instance
@@ -381,6 +435,7 @@ function CloneModule:Init(sanityModule)
 							end
 						end
 					else
+						anyChasing = true
 						local chaseElapsed = tick() - cloneData.ChaseStartTime
 						if chaseElapsed >= CONFIG.ChaseDuration then
 							table.remove(activeClones, i)
@@ -394,20 +449,14 @@ function CloneModule:Init(sanityModule)
 								cloneHumanoid.WalkSpeed = currentSpeed
 							end
 							
-							local colorCorr = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
-							if not colorCorr then
-								colorCorr = Instance.new("ColorCorrectionEffect")
-								colorCorr.Parent = Lighting
+							-- Update black vignette intensity and scale progressively as chase continues
+							local vignette = getOrCreateVignetteGui()
+							if vignette then
+								vignette.ImageTransparency = math.clamp(1 - (chaseProgress * 0.8), 0.2, 1)
 							end
-							colorCorr.TintColor = Color3.fromRGB(15 + math.floor(40 * (1 - chaseProgress)), 0, 30)
-							colorCorr.Saturation = -1 - (chaseProgress * 3)
-							colorCorr.Contrast = 1 + (chaseProgress * 2)
 							
 							if horizontalDist < CONFIG.CatchDistance then
 								table.remove(activeClones, i)
-								colorCorr.TintColor = Color3.fromRGB(255, 255, 255)
-								colorCorr.Saturation = 0
-								colorCorr.Contrast = 0
 								triggerCatch(clone, sanityModule)
 							end
 						end
@@ -435,6 +484,14 @@ function CloneModule:Init(sanityModule)
 				end
 			else
 				table.remove(activeClones, i)
+			end
+		end
+		
+		-- Reset vignette if no clones are currently in an active chase
+		if not anyChasing then
+			local vignette = getOrCreateVignetteGui()
+			if vignette and vignette.ImageTransparency < 1 then
+				vignette.ImageTransparency = 1
 			end
 		end
 	end)
