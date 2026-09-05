@@ -1,12 +1,13 @@
 -- =================================================================
--- MODULE SCRIPT: CloneManager (Doppelgänger Spawner & AI Mechanics)
--- Upload this raw script to your GitHub repository to manage the clones.
+-- MODULE SCRIPT: CloneManager (GitHub Repository Script)
+-- Uses game:GetService("Chat"):Chat() for Roblox built-in chat bubbles
 -- =================================================================
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
+local ChatService = game:GetService("Chat")
 local Camera = workspace.CurrentCamera
 
 local localPlayer = Players.LocalPlayer
@@ -15,7 +16,7 @@ local isGlitching = false
 
 local CloneModule = {}
 
--- Trigger glitch penalty effect when running into a clone (< 3 studs)
+-- Trigger visual glitched penalty and sanity reduction when within 3 studs
 local function triggerPenalty(cloneInstance, sanityModule)
 	if isGlitching then return end
 	isGlitching = true
@@ -64,13 +65,12 @@ local function triggerPenalty(cloneInstance, sanityModule)
 end
 
 function CloneModule:Init(sanityModule)
-	-- 1. Doppelgänger Spawner Loop (runs every 1 second)
+	-- 1. Spawner Loop: 1/10 chance per second at 100 sanity, scaling up as sanity decreases
 	task.spawn(function()
 		while true do
 			task.wait(1)
 			
 			local currentSanity = sanityModule:GetSanity()
-			-- Scale spawn probability: At 100 sanity chance is 1/10 (10%). Lower sanity increases frequency.
 			local scaleFactor = math.clamp(currentSanity / 100, 0.1, 1)
 			local chanceThreshold = math.floor(10 * scaleFactor)
 			
@@ -120,26 +120,7 @@ function CloneModule:Init(sanityModule)
 									end
 								end
 								
-								local head = clone:FindFirstChild("Head")
-								local billboard, textLabel
-								if head then
-									billboard = Instance.new("BillboardGui")
-									billboard.Size = UDim2.new(0, 200, 0, 50)
-									billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-									billboard.AlwaysOnTop = true
-									billboard.Parent = head
-									
-									textLabel = Instance.new("TextLabel")
-									textLabel.Size = UDim2.new(1, 0, 1, 0)
-									textLabel.BackgroundTransparency = 1
-									textLabel.TextColor3 = Color3.fromRGB(180, 0, 255)
-									textLabel.TextScaled = true
-									textLabel.Font = Enum.Font.Code
-									textLabel.Text = ""
-									textLabel.Parent = billboard
-								end
-								
-								-- Ensure spawn position is outside a safe radius from the player (prevents spawning directly on them)
+								-- Ensure clones do NOT spawn directly on top of the player
 								local localRoot = localChar.HumanoidRootPart
 								local spawnPos
 								local validSpawn = false
@@ -148,7 +129,7 @@ function CloneModule:Init(sanityModule)
 								repeat
 									attempts = attempts + 1
 									local randomAngle = math.random() * math.pi * 2
-									local randomDist = math.random(8, 18) -- Minimum 8 studs away from player
+									local randomDist = math.random(8, 18)
 									local rayOrigin = localRoot.Position + Vector3.new(math.cos(randomAngle) * randomDist, 10, math.sin(randomAngle) * randomDist)
 									
 									local raycastParams = RaycastParams.new()
@@ -173,8 +154,6 @@ function CloneModule:Init(sanityModule)
 								
 								local cloneData = {
 									Instance = clone,
-									TextLabel = textLabel,
-									Billboard = billboard,
 								}
 								table.insert(activeClones, cloneData)
 								
@@ -191,7 +170,7 @@ function CloneModule:Init(sanityModule)
 		end
 	end)
 	
-	-- 2. Chat listener to detect local player chatting within 5 studs of a clone
+	-- 2. Chat Listener: Detects local player chatting within 5 studs using Roblox Chat:Chat() bubble
 	localPlayer.Chatted:Connect(function(message)
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -199,36 +178,30 @@ function CloneModule:Init(sanityModule)
 		
 		for _, cloneData in ipairs(activeClones) do
 			local clone = cloneData.Instance
-			if clone and clone.Parent and clone:FindFirstChild("HumanoidRootPart") then
+			if clone and clone.Parent and clone:FindFirstChild("Head") and clone:FindFirstChild("HumanoidRootPart") then
 				local cloneRoot = clone.HumanoidRootPart
 				
 				if (cloneRoot.Position - localPos).Magnitude <= 5 then
-					if cloneData.TextLabel then
-						local basePhrase = "you are so intriguing"
-						local scrambled = ""
-						for c = 1, #basePhrase do
-							local char = basePhrase:sub(c, c)
-							if char ~= " " and math.random() > 0.2 then
-								scrambled = scrambled .. string.char(math.random(33, 126))
-							else
-								scrambled = scrambled .. char
-							end
+					local basePhrase = "you are so intriguing"
+					local scrambled = ""
+					for c = 1, #basePhrase do
+						local char = basePhrase:sub(c, c)
+						if char ~= " " and math.random() > 0.2 then
+							scrambled = scrambled .. string.char(math.random(33, 126))
+						else
+							scrambled = scrambled .. char
 						end
-						cloneData.TextLabel.Text = scrambled
-						
-						task.delay(2, function()
-							if cloneData.TextLabel then
-								cloneData.TextLabel.Text = ""
-							end
-						end)
 					end
+					
+					-- Uses Roblox's built-in chat system to display speech bubbles above the clone's head
+					ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					break
 				end
 			end
 		end
 	end)
 	
-	-- 3. Render Loop for head tracking, proximity checks, and periodic clone dialogue
+	-- 3. Render Loop: Head tracking, proximity detection, and periodic ambient Roblox chat speech bubbles
 	RunService.RenderStepped:Connect(function()
 		local localChar = localPlayer.Character
 		if not localChar or not localChar:FindFirstChild("HumanoidRootPart") then return end
@@ -239,41 +212,31 @@ function CloneModule:Init(sanityModule)
 			local cloneData = activeClones[i]
 			local clone = cloneData.Instance
 			
-			if clone and clone.Parent and clone:FindFirstChild("HumanoidRootPart") then
+			if clone and clone.Parent and clone:FindFirstChild("Head") and clone:FindFirstChild("HumanoidRootPart") then
 				local cloneRoot = clone.HumanoidRootPart
 				
-				-- Track player rotation
 				local lookCFrame = CFrame.lookAt(cloneRoot.Position, Vector3.new(localPos.X, cloneRoot.Position.Y, localPos.Z))
 				clone:PivotTo(lookCFrame)
 				
-				-- Check collision/distance threshold (< 3 studs)
 				if (cloneRoot.Position - localPos).Magnitude < 3 then
 					table.remove(activeClones, i)
 					triggerPenalty(clone, sanityModule)
 				else
-					-- Periodic jumbled text output (every 0.9 to 1.5 seconds)
 					if not cloneData.NextChatTime or tick() >= cloneData.NextChatTime then
 						cloneData.NextChatTime = tick() + math.random(90, 150) / 100
 						
-						if cloneData.TextLabel then
-							local basePhrase = "you are so intriguing"
-							local scrambled = ""
-							for c = 1, #basePhrase do
-								local char = basePhrase:sub(c, c)
-								if char ~= " " and math.random() > 0.2 then
-									scrambled = scrambled .. string.char(math.random(33, 126))
-								else
-									scrambled = scrambled .. char
-								end
+						local basePhrase = "you are so intriguing"
+						local scrambled = ""
+						for c = 1, #basePhrase do
+							local char = basePhrase:sub(c, c)
+							if char ~= " " and math.random() > 0.2 then
+								scrambled = scrambled .. string.char(math.random(33, 126))
+							else
+								scrambled = scrambled .. char
 							end
-							cloneData.TextLabel.Text = scrambled
-							
-							task.delay(1.2, function()
-								if cloneData.TextLabel then
-									cloneData.TextLabel.Text = ""
-								end
-							end)
 						end
+						
+						ChatService:Chat(clone.Head, scrambled, Enum.ChatColor.Red)
 					end
 				end
 			else
