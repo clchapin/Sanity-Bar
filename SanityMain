@@ -1,1 +1,62 @@
 
+-- =================================================================
+-- MODULE SCRIPT: SanityMain (Single-Script Implementation for GitHub)
+-- Upload this raw script to your GitHub repository at:
+-- https://raw.githubusercontent.com/clchapin/Sanity-Bar/refs/heads/main/SanityMain
+-- =================================================================
+
+local Players = game:GetService("Players")
+local localPlayer = Players.LocalPlayer
+
+local SanityModule = {}
+SanityModule.CurrentSanity = 100
+SanityModule.MaxSanity = 100
+
+local drainRate = 0.3
+local isRunning = false
+local onSanityChangedCallbacks = {}
+
+function SanityModule:StartDrain()
+	if isRunning then return end
+	isRunning = true
+	
+	task.spawn(function()
+		while isRunning do
+			task.wait(1)
+			self.CurrentSanity = math.clamp(self.CurrentSanity - drainRate, 0, self.MaxSanity)
+			
+			-- Notify all linked scripts (like your upcoming clone script) of the current sanity
+			for _, callback in ipairs(onSanityChangedCallbacks) do
+				task.spawn(callback, self.CurrentSanity)
+			end
+			
+			-- Handle player death at 0 sanity
+			if self.CurrentSanity <= 0 then
+				local char = localPlayer.Character
+				if char then
+					local humanoid = char:FindFirstChildOfClass("Humanoid")
+					if humanoid then
+						humanoid.Health = 0
+					end
+				end
+			end
+		end
+	end)
+end
+
+function SanityModule:GetSanity()
+	return self.CurrentSanity
+end
+
+function SanityModule:ModifySanity(amount)
+	self.CurrentSanity = math.clamp(self.CurrentSanity + amount, 0, self.MaxSanity)
+	for _, callback in ipairs(onSanityChangedCallbacks) do
+		task.spawn(callback, self.CurrentSanity)
+	end
+end
+
+function SanityModule:OnSanityChanged(callback)
+	table.insert(onSanityChangedCallbacks, callback)
+end
+
+return SanityModule
